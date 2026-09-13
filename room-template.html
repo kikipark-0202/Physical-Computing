@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>내 방 · 공간 편집기</title><style>
+*{box-sizing:border-box}body{margin:0;overflow:hidden;font-family:system-ui,sans-serif;color:#393d35;background:#eee9e1}canvas{display:block}aside{position:fixed;top:16px;left:16px;width:280px;max-height:calc(100dvh - 32px);overflow:auto;padding:20px;background:#fffaf2ed;border:1px solid #d6cdbf;border-radius:16px;box-shadow:0 12px 40px #40352518}h1{font-size:21px;margin:0 0 8px}p,small{font-size:12px;line-height:1.7;color:#6c7065}label{display:block;font-size:12px;margin:12px 0 5px}input,select,button,textarea{font:inherit;width:100%;padding:8px;border:1px solid #d3cbbb;border-radius:7px;background:#fffdf9;color:inherit}input[type=color]{height:38px;padding:3px}button{cursor:pointer;margin-top:8px;background:#566c5c;color:white;border:0}button.secondary{background:#e9e2d5;color:#393d35}.row{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}.row label{margin:4px 0}textarea{height:150px;font:11px monospace}#status{position:fixed;bottom:16px;right:16px;background:#fffaf2ed;padding:10px 16px;border-radius:10px;font-size:12px;max-width:45vw}summary{cursor:pointer;font-weight:600}details{margin-top:12px}@media(max-width:600px){aside{width:220px;max-height:55dvh;padding:12px;top:8px;left:8px}h1{font-size:17px}}
+</style></head><body>
+<aside><h1>Digital Twin Room</h1><p>가구를 클릭하거나 목록에서 선택하세요.</p>
+<small>임시 방 크기 4.8 × 4.8m · 높이 2.6m<br>도면 위 = −Z / 오른쪽 = +X / 높이 = Y</small>
+<label for="item">편집할 물체</label><select id="item"></select>
+<label for="color">주 색상</label><input id="color" type="color">
+<label for="accent">보조 색상</label><input id="accent" type="color">
+<label>위치 (m · 물체 중심)</label><div class="row" id="position"></div>
+<label>크기 (m · 회전 전 기준)</label><div class="row" id="size"></div>
+<label for="rotation">회전 (도)</label><input id="rotation" type="number" step="5">
+<button id="ground" class="secondary">바닥에 맞추기</button>
+<div class="row"><button id="top">평면 보기</button><button id="perspective">입체 보기</button><button id="doorButton">문 열기</button></div>
+<button id="save">이 브라우저에 저장</button><button id="reset" class="secondary">기본 배치로 복원</button>
+<details><summary>OBJECTS 코드 내보내기</summary><p>아래 코드를 복사해 파일의 const OBJECTS 구간을 교체하세요.</p><button id="export">현재 코드 생성</button><textarea id="code" aria-label="OBJECTS 코드" readonly></textarea></details>
+<p>현재 제 방을 디지털 트윈하여 설계하였습니다.</p>
+</aside><div id="status" role="status">박기현 제작</div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// 여기를 바꿔보세요. 단위 m, rotation은 도 단위입니다.
+// size = [가로, 높이, 깊이], pos = [좌우, 중심 높이, 앞뒤].
+// 도면 위쪽은 -Z, 오른쪽은 +X. 회전 전 가구 앞면은 +Z입니다.
+// color는 주 색상, accent는 보조 색상. id는 중복 없이 유지하세요.
+const OBJECTS = [
+  { id:'bed', type:'bed', name:'침대', size:[1.25,0.85,2.65], pos:[0.72,0.425,-0.88], rotation:0, color:0x80917b, accent:0xece0ca },
+  { id:'lamp', type:'lamp', name:'대형 스탠드', size:[0.42,1.70,0.42], pos:[-0.28,0.85,-1.56], rotation:0, color:0xc2a36b, accent:0xf3dfb5 },
+  { id:'nightstand', type:'nightstand', name:'협탁', size:[0.85,0.58,0.55], pos:[-0.48,0.29,-2.05], rotation:0, color:0xa87d58, accent:0xc2a36b },
+  { id:'piano', type:'piano', name:'피아노', size:[1.35,1.18,0.58], pos:[-1.67,0.59,-2.04], rotation:0, color:0x414d49, accent:0xc2a36b },
+  { id:'curtain-top', type:'curtain', name:'커튼 · 위', size:[1.10,2.30,0.15], pos:[1.97,1.30,-1.72], rotation:90, color:0xc18b73, accent:0xc2a36b },
+  { id:'curtain-bottom', type:'curtain', name:'커튼 · 아래', size:[1.10,2.30,0.15], pos:[1.97,1.30,-0.04], rotation:90, color:0xc18b73, accent:0xc2a36b },
+  { id:'bookshelf', type:'bookshelf', name:'책장', size:[2.65,1.20,0.32], pos:[-0.98,0.60,2.13], rotation:180, color:0x987452, accent:0x708d8b },
+  { id:'wardrobe', type:'wardrobe', name:'옷장', size:[2.55,2.15,0.55], pos:[-2.08,1.075,0.42], rotation:90, color:0xd7c6a9, accent:0x75634f },
+  // 오른쪽 벽의 창문 끝(+Z 0.455m)과 아래쪽 베란다 문 사이에 배치합니다.
+  { id:'rack', type:'rack', name:'옷걸이스탠드', size:[1.20,1.65,0.42], pos:[2.12,0.825,1.39], rotation:-90, color:0x515d55, accent:0xb97c65 },
+  { id:'balcony', type:'door', name:'베란다 문', size:[1.35,2.20,0.10], pos:[1.36,1.10,2.32], rotation:180, color:0xe7dece, accent:0x93b6b9 },
+  { id:'window', type:'window', name:'창문', size:[2.75,1.55,0.10], pos:[2.34,1.55,-0.92], rotation:-90, color:0xeee5d6, accent:0x9dbec0 },
+];
+const ROOM = { width:4.8, depth:4.8, height:2.6 };
+const defaults = structuredClone(OBJECTS);
+const $ = id => document.getElementById(id);
+const status = message => $('status').textContent = message;
+const scene = new THREE.Scene(); scene.background = new THREE.Color(0xeee9e1);
+const camera = new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.1,100);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight); renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.shadowMap.enabled=true; renderer.shadowMap.type=THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+const controls = new OrbitControls(camera,renderer.domElement); controls.enableDamping=true; controls.maxPolarAngle=Math.PI/2.02;
+function view(top=false){ camera.up.set(0,top?0:1,top?-1:0); camera.position.set(top?0:6,top?9:6.8,top?0:8); controls.target.set(0,0.5,0); controls.update(); }
+view();
+scene.add(new THREE.HemisphereLight(0xfff7e7,0x8b9380,2));
+const sun=new THREE.DirectionalLight(0xffefd4,3); sun.position.set(-3,8,4); sun.castShadow=true; sun.shadow.mapSize.set(2048,2048); Object.assign(sun.shadow.camera,{left:-5,right:5,top:5,bottom:-5}); sun.shadow.bias=-0.001;scene.add(sun);
+function box(parent,size,pos,color,extra={}){const mesh=new THREE.Mesh(new THREE.BoxGeometry(...size),new THREE.MeshStandardMaterial({color,roughness:0.72,...extra}));mesh.position.set(...pos);mesh.castShadow=true;mesh.receiveShadow=true;parent.add(mesh);return mesh;}
+box(scene,[ROOM.width,0.08,ROOM.depth],[0,-0.04,0],0xcbb798);
+// 낮은 벽으로 도면의 모든 물체가 보이도록 합니다.
+box(scene,[ROOM.width,0.18,0.06],[0,0.09,-ROOM.depth/2],0xe6ddcd);
+box(scene,[0.06,0.18,ROOM.depth],[-ROOM.width/2,0.09,0],0xe6ddcd);
+const grid=new THREE.GridHelper(ROOM.width,24,0xb5a88f,0xb5a88f);grid.position.y=0.002;grid.material.transparent=true;grid.material.opacity=0.18;scene.add(grid);
+const objects={}; const roots=new Map(); let door,doorAngle=0;
+// 각 부품을 기본 비율로 만든 뒤 size로 실제 크기를 적용합니다.
+function build(item){
+ const g=new THREE.Group();g.userData.id=item.id;g.userData.name=item.name;
+ const c=item.color,a=item.accent;
+ const b=(s,p,col=c,extra)=>box(g,s,p,col,extra);
+ if(item.type==='bed'){
+  b([1,.25,1],[0,-.33,0],0x987452);b([.98,.30,.91],[0,-.06,.035],a);b([1,1,.055],[0,0,-.47],c);
+  b([.99,.12,.61],[0,.15,.19],c);b([.92,.04,.19],[0,.23,.36],0xb97c65);
+  for(const x of [-.24,.24])b([.42,.14,.18],[x,.16,-.29],a);
+ }else if(item.type==='lamp'){
+  b([.65,.035,.65],[0,-.48,0]);b([.055,.78,.055],[0,-.08,0]);
+  const shade=new THREE.Mesh(new THREE.CylinderGeometry(.30,.50,.26,32),new THREE.MeshStandardMaterial({color:a,emissive:a,emissiveIntensity:.22,side:THREE.DoubleSide}));shade.position.y=.37;g.add(shade);
+ }else if(item.type==='nightstand'){
+  b([1,.8,1],[0,.1,0]);b([.90,.32,.025],[0,.12,.51],0xd7c6a9);b([.20,.025,.04],[0,.12,.54],a);
+  for(const x of [-.4,.4])for(const z of [-.38,.38])b([.07,.2,.07],[x,-.4,z]);
+ }else if(item.type==='piano'){
+  b([1,.70,.55],[0,.15,-.225]);b([1,.1,1],[0,-.10,0]);
+  for(const x of [-.46,.46])b([.08,.45,.15],[x,-.275,.37]);
+  for(let i=0;i<35;i++){const x=-.44+i*.026;b([.024,.035,.36],[x,-.032,.23],0xf4ebda);if(![2,6].includes(i%7))b([.014,.025,.20],[x+.013,-.002,.16],0x242d2a);}
+  b([.85,.018,.025],[0,.28,.06],a);
+ }else if(item.type==='curtain'){
+  b([1,.025,.12],[0,.485,0],a);
+  for(let i=0;i<18;i++)b([1/18,.94,.50+Math.sin(i*Math.PI/2)*.22],[-.472+i/18,-.015,0],i%2?c:new THREE.Color(c).multiplyScalar(.92));
+ }else if(item.type==='bookshelf'){
+  b([1,1,.10],[0,0,-.45]);for(const x of [-.48,.48])b([.04,1,1],[x,0,0]);
+  for(const y of [-.48,-.16,.16,.48])b([1,.04,1],[0,y,0]);
+  for(let row=0;row<3;row++)for(let i=0;i<14;i++)b([.035,.18+(i%3)*.03,.66],[-.43+i*.063,-.45+row*.32+(.18+(i%3)*.03)/2,0],[a,0xb97c65,0xe7d9bc,0x515d55][i%4]);
+ }else if(item.type==='wardrobe'){
+  b([1,1,1],[0,0,0]);for(let i=0;i<4;i++){const x=-.375+i*.25;b([.242,.94,.025],[x,0,.51]);b([.012,.12,.04],[x+.08,-.03,.54],a);}
+ }else if(item.type==='rack'){
+  for(const x of [-.46,.46]){b([.035,1,.06],[x,0,0]);b([.10,.025,1],[x,-.487,0]);}
+  b([1,.03,.06],[0,.48,0]);for(let i=0;i<5;i++){const x=-.32+i*.16;b([.13,.54,.30],[x,.08,0],i%2?a:0xd7c6a9);b([.035,.13,.03],[x,.39,0]);}
+ }else if(['door','window'].includes(item.type)){
+  for(const x of [-.48,.48])b([.04,1,1],[x,0,0]);for(const y of [-.48,.48])b([1,.04,1],[0,y,0]);
+  const panel=new THREE.Group();g.add(panel);
+  if(item.type==='door'){panel.position.x=-.46;door=panel;}
+  const offset=item.type==='door'?.46:0;
+  box(panel,[.9,.9,.25],[offset,0,0],a,{transparent:true,opacity:.38,metalness:.15,roughness:.18});
+  box(panel,[.025,.94,.6],[offset,0,0],c);
+  if(item.type==='door')box(panel,[.025,.12,.8],[.83,0,.45],0xc2a36b);
+ }else b([1,1,1],[0,0,0]);
+ g.position.set(...item.pos);g.rotation.y=THREE.MathUtils.degToRad(item.rotation);g.scale.set(...item.size);
+ g.traverse(child=>{child.userData.id=item.id;child.userData.name=item.name;});scene.add(g);roots.set(item.id,g);objects[item.name]=g;
+ if(item.type==='door')setDoorAngle(doorAngle);
+ return g;
+}
+function dispose(g){g.traverse(m=>{m.geometry?.dispose();if(m.material)m.material.dispose();});scene.remove(g);}
+function rebuild(item){const old=roots.get(item.id);if(old)dispose(old);build(item);highlight();}
+const selection=new THREE.BoxHelper(undefined,0xb97652);scene.add(selection);selection.visible=false;
+let selected=OBJECTS[0].id;
+function highlight(){const g=roots.get(selected);if(g){selection.setFromObject(g);selection.visible=true;}}
+function setDoorAngle(value){if(!Number.isFinite(value))return doorAngle;doorAngle=THREE.MathUtils.clamp(value,0,90);if(door)door.rotation.y=-THREE.MathUtils.degToRad(doorAngle);$('doorButton').textContent=doorAngle?'문 닫기':'문 열기';return doorAngle;}
+const hex=n=>'#'+n.toString(16).padStart(6,'0');
+for(const [field,labels] of [['pos',['X','Y','Z']],['size',['가로','높이','깊이']]])labels.forEach((label,i)=>{
+ const wrap=document.createElement('label');wrap.textContent=label;const input=document.createElement('input');input.type='number';input.step='.05';input.id=field+i;if(field==='size')input.min='.05';wrap.append(input);$(field==='pos'?'position':'size').append(wrap);
+ input.addEventListener('change',()=>{const v=input.valueAsNumber;if(!Number.isFinite(v)||(field==='size'&&v<.05)){fill();return;}current()[field][i]=v;rebuild(current());});
+});
+function current(){return OBJECTS.find(i=>i.id===selected);}
+function fill(){const item=current();$('item').value=selected;$('color').value=hex(item.color);$('accent').value=hex(item.accent);$('rotation').value=item.rotation;for(const f of ['pos','size'])item[f].forEach((v,i)=>$(f+i).value=v);highlight();}
+function init(){for(const g of roots.values())dispose(g);roots.clear();for(const key of Object.keys(objects))delete objects[key];$('item').replaceChildren();for(const item of OBJECTS){build(item);$('item').add(new Option(item.name,item.id));}selected=OBJECTS[0].id;fill();}
+$('item').onchange=()=>{selected=$('item').value;fill();};
+for(const key of ['color','accent'])$(key).oninput=()=>{current()[key]=parseInt($(key).value.slice(1),16);rebuild(current());};
+$('rotation').onchange=()=>{const v=$('rotation').valueAsNumber;if(Number.isFinite(v)){current().rotation=v;rebuild(current());}else fill();};
+$('ground').onclick=()=>{current().pos[1]=current().size[1]/2;rebuild(current());fill();};
+$('top').onclick=()=>view(true);$('perspective').onclick=()=>view();$('doorButton').onclick=()=>{setDoorAngle(doorAngle?0:80);highlight();};
+const storageKey='room-template-layout-v1';
+$('save').onclick=()=>{try{localStorage.setItem(storageKey,JSON.stringify(OBJECTS));status('현재 배치를 이 브라우저에 저장했습니다.');}catch{status('저장할 수 없습니다. 코드 내보내기를 이용하세요.');}};
+$('reset').onclick=()=>{OBJECTS.splice(0,OBJECTS.length,...structuredClone(defaults));setDoorAngle(0);init();status('기본 배치를 복원했습니다. 유지하려면 저장하세요.');};
+$('export').onclick=()=>{$('code').value='const OBJECTS = '+JSON.stringify(OBJECTS,null,2).replace(/"(color|accent)": (\d+)/g,(_,key,n)=>'"'+key+'": 0x'+Number(n).toString(16).padStart(6,'0'))+';';$('code').select();status('현재 OBJECTS 코드를 생성했습니다.');};
+try{const saved=JSON.parse(localStorage.getItem(storageKey));if(saved){
+ const valid=Array.isArray(saved)&&saved.length===defaults.length&&defaults.every(d=>saved.some(s=>s.id===d.id&&s.type===d.type&&s.name===d.name))&&saved.every(s=>['pos','size'].every(k=>Array.isArray(s[k])&&s[k].length===3&&s[k].every(n=>Number.isFinite(n)&&(k!=='size'||n>=.05)))&&Number.isFinite(s.rotation)&&['color','accent'].every(k=>Number.isInteger(s[k])&&s[k]>=0&&s[k]<=0xffffff));
+ if(valid){
+  // 이전 창문 앞 위치만 보정하고, 직접 편집한 다른 위치는 유지합니다.
+  const rack=saved.find(item=>item.id==='rack');
+  if(rack.pos[0]===2.12&&rack.pos[2]===-1.39)rack.pos[2]=1.39;
+  OBJECTS.splice(0,OBJECTS.length,...saved);status('저장된 배치를 불러왔습니다.');
+ }else status('저장된 데이터가 올바르지 않아 기본 배치를 불러왔습니다.');
+}}catch{status('기본 배치를 불러왔습니다.');}
+init();
+const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();let down;
+renderer.domElement.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];});
+renderer.domElement.addEventListener('pointerup',e=>{if(!down||Math.hypot(e.clientX-down[0],e.clientY-down[1])>5)return;pointer.set(e.clientX/innerWidth*2-1,-e.clientY/innerHeight*2+1);raycaster.setFromCamera(pointer,camera);const hit=raycaster.intersectObjects([...roots.values()],true)[0];if(hit){selected=hit.object.userData.id;fill();status(current().name+' 선택됨');}});
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
+renderer.setAnimationLoop(()=>{controls.update();renderer.render(scene,camera);});
+window.twin={scene,camera,renderer,objects,get door(){return door;},setDoorAngle};
+</script></body></html>
